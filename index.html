@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>勤怠管理（管理者）</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet" />
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js";
+    import {
+      getFirestore,
+      collection,
+      getDocs,
+      addDoc,
+      deleteDoc,
+      doc,
+      query,
+      orderBy,
+      setDoc
+    } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyAJrXXuNME5hKZLQcpKzkILIDqsISN6IAY",
+      authDomain: "kintai-app-cd34b.firebaseapp.com",
+      projectId: "kintai-app-cd34b",
+      storageBucket: "kintai-app-cd34b.firebasestorage.app",
+      messagingSenderId: "781700025980",
+      appId: "1:781700025980:web:52a28fd7b6704a5e1d03f9"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    let allRecords = [];
+    let employees = [];
+
+    async function loadEmployees() {
+      const snap = await getDocs(collection(db, "employees"));
+      employees = [];
+      snap.forEach(doc => employees.push({ id: doc.id, name: doc.data().name }));
+      updateEmployeeSelects();
+    }
+
+    function updateEmployeeSelects() {
+      const select = document.getElementById("employee-filter");
+      const deleteSelect = document.getElementById("delete-employee");
+      select.innerHTML = '<option value="all">全員</option>';
+      deleteSelect.innerHTML = "";
+      employees.forEach(emp => {
+        select.appendChild(new Option(emp.name, emp.name));
+        deleteSelect.appendChild(new Option(emp.name, emp.id));
+      });
+    }
+
+    async function addEmployee() {
+      const name = document.getElementById("new-employee").value.trim();
+      if (!name) return alert("名前を入力してください");
+      const exists = employees.some(e => e.name === name);
+      if (exists) return alert("すでに存在します");
+      await addDoc(collection(db, "employees"), { name });
+      document.getElementById("new-employee").value = "";
+      await loadEmployees();
+    }
+
+    async function deleteEmployee() {
+      const id = document.getElementById("delete-employee").value;
+      if (!id) return;
+      const emp = employees.find(e => e.id === id);
+      if (!confirm(`本当に「${emp.name}」を削除しますか？`)) return;
+      await deleteDoc(doc(db, "employees", id));
+      await loadEmployees();
+    }
+
+    async function loadData() {
+      const q = query(collection(db, "attendance"), orderBy("timestamp", "asc"));
+      const snapshot = await getDocs(q);
+
+      allRecords = [];
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        const timestamp = data.timestamp?.toDate();
+        if (timestamp) {
+          allRecords.push({
+            name: data.name,
+            type: data.type,
+            datetime: timestamp
+          });
+        }
+      });
+
+      populateMonthSelect();
+      renderTable();
+    }
+
+    function populateMonthSelect() {
+      const monthSet = new Set(allRecords.map(r => r.datetime.toISOString().slice(0, 7)));
+      const select = document.getElementById("month-select");
+      select.innerHTML = "";
+      [...monthSet].sort().forEach(month => {
+        select.appendChild(new Option(month, month));
+      });
+    }
+
+    function renderTable() {
+      const table = document.getElementById("records");
+      const totalEl = document.getElementById("total");
+      const selectedMonth = document.getElementById("month-select").value;
+      const selectedEmp = document.getElementById("employee-filter").value;
+
+      table.innerHTML = "";
+      const filtered = allRecords.filter(r => {
+        return r.datetime.toISOString().startsWith(selectedMonth) &&
+               (selectedEmp === "all" || r.name === selectedEmp);
+      });
+
+      const grouped = {};
+      for (const item of filtered) {
+        const dateKey = item.datetime.toISOString().split("T")[0];
+        const key = `${item.name}_${dateKey}`;
+        if (!grouped[key]) {
+          grouped[key] = { name: item.name, date: dateKey, in: null, out: null };
+        }
+        if (item.type === "in") grouped[key].in = item.datetime;
+        if (item.type === "out") grouped[key].out = item.datetime;
+      }
+
+      const csvRows = [["名前", "日付", "出勤", "退勤", "実働時間"]];
+      let totalMinutes = 0;
+
+      Object.values(grouped).forEach(r => {
+        const inTime = r.in ? r.in.toLocaleTimeString("ja-JP") : "";
+        const outTime = r.out ? r.out.toLocaleTimeString("ja-JP") : "";
+        let workTime = "";
+        let rowClass = "";
+
+        if (r.in && r.out) {
+          const inMs = r.in.getTime();
+          const outMs = r.out.getTime();
+          if (outMs < inMs) {
+            workTime = "⚠️日付エラー";
+            rowClass = "bg-yellow-100";
+          } else {
+            const diff = Math.floor((outMs - inMs) / 60000);
+            totalMinutes += diff;
+            const h = Math.floor(diff / 60);
+            const m = diff % 60;
+            workTime = `${h}時間${m}分`;
+          }
+        } else {
+          workTime = "⚠️打刻漏れ";
+          rowClass = "bg-yellow-100";
+        }
+
+        const row = document.createElement("tr");
+        row.className = rowClass;
+        row.innerHTML = `
+          <td class="px-4 py-2 border">${r.name}</td>
+          <td class="px-4 py-2 border">${r.date}</td>
+          <td class="px-4 py-2 border">${inTime || "－"}</td>
+          <td class="px-4 py-2 border">${outTime || "－"}</td>
+          <td class="px-4 py-2 border">${workTime}</td>
+        `;
+        table.appendChild(row);
+        csvRows.push([r.name, r.date, inTime, outTime, workTime]);
+      });
+
+      const h = Math.floor(totalMinutes / 60);
+      const m = totalMinutes % 60;
+      totalEl.textContent = `合計：${h}時間${m}分`;
+
+      window._csvData = csvRows;
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      document.getElementById("month-select").addEventListener("change", renderTable);
+      document.getElementById("employee-filter").addEventListener("change", renderTable);
+      document.getElementById("download-csv").addEventListener("click", () => {
+        if (!window._csvData) return;
+        const csvContent = "\uFEFF" + window._csvData.map(r => r.join(",")).join("\n");
+        const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "勤怠記録.csv";
+        a.click();
+      });
+      document.getElementById("add-employee-btn").addEventListener("click", addEmployee);
+      document.getElementById("delete-employee-btn").addEventListener("click", deleteEmployee);
+
+      loadEmployees();
+      loadData();
+    });
+  </script>
+</head>
+<body class="bg-gray-100 min-h-screen p-4">
+  <div class="max-w-6xl mx-auto bg-white p-6 rounded shadow">
+    <h1 class="text-2xl font-bold text-blue-700 mb-4 text-center">勤怠管理（管理者）</h1>
+
+    <!-- 従業員管理 -->
+    <div class="mb-6 bg-blue-50 p-4 rounded">
+      <h2 class="text-lg font-semibold mb-2">従業員の追加・削除</h2>
+      <div class="flex flex-col md:flex-row gap-4">
+        <div class="flex-1 flex gap-2">
+          <input type="text" id="new-employee" placeholder="従業員名を入力" class="p-2 border rounded w-full" />
+          <button id="add-employee-btn" class="bg-blue-600 text-white px-4 rounded hover:bg-blue-700">追加</button>
+        </div>
+        <div class="flex-1 flex gap-2">
+          <select id="delete-employee" class="p-2 border rounded w-full"></select>
+          <button id="delete-employee-btn" class="bg-red-600 text-white px-4 rounded hover:bg-red-700">削除</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- フィルター -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+      <div>
+        <label class="block text-sm font-medium mb-1">表示する月：</label>
+        <select id="month-select" class="p-2 border rounded w-full"></select>
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-1">従業員フィルター：</label>
+        <select id="employee-filter" class="p-2 border rounded w-full">
+          <option value="all">全員</option>
+        </select>
+      </div>
+      <div class="flex items-end">
+        <button id="download-csv" class="w-full bg-green-600 text-white py-2 rounded hover:bg-green-700">
+          CSVダウンロード
+        </button>
+      </div>
+    </div>
+
+    <p id="total" class="text-right font-semibold text-gray-700 mb-2"></p>
+
+    <div class="overflow-x-auto">
+      <table class="min-w-full border text-sm text-left">
+        <thead class="bg-gray-100">
+          <tr>
+            <th class="px-4 py-2 border">名前</th>
+            <th class="px-4 py-2 border">日付</th>
+            <th class="px-4 py-2 border">出勤</th>
+            <th class="px-4 py-2 border">退勤</th>
+            <th class="px-4 py-2 border">実働時間</th>
+          </tr>
+        </thead>
+        <tbody id="records" class="bg-white divide-y divide-gray-200"></tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>
