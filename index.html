@@ -8,15 +8,7 @@
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js";
     import {
-      getFirestore,
-      collection,
-      getDocs,
-      addDoc,
-      deleteDoc,
-      doc,
-      query,
-      orderBy,
-      setDoc
+      getFirestore, collection, getDocs, deleteDoc, doc, query, orderBy
     } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js";
 
     const firebaseConfig = {
@@ -32,49 +24,10 @@
     const db = getFirestore(app);
 
     let allRecords = [];
-    let employees = [];
-
-    async function loadEmployees() {
-      const snap = await getDocs(collection(db, "employees"));
-      employees = [];
-      snap.forEach(doc => employees.push({ id: doc.id, name: doc.data().name }));
-      updateEmployeeSelects();
-    }
-
-    function updateEmployeeSelects() {
-      const select = document.getElementById("employee-filter");
-      const deleteSelect = document.getElementById("delete-employee");
-      select.innerHTML = '<option value="all">全員</option>';
-      deleteSelect.innerHTML = "";
-      employees.forEach(emp => {
-        select.appendChild(new Option(emp.name, emp.name));
-        deleteSelect.appendChild(new Option(emp.name, emp.id));
-      });
-    }
-
-    async function addEmployee() {
-      const name = document.getElementById("new-employee").value.trim();
-      if (!name) return alert("名前を入力してください");
-      const exists = employees.some(e => e.name === name);
-      if (exists) return alert("すでに存在します");
-      await addDoc(collection(db, "employees"), { name });
-      document.getElementById("new-employee").value = "";
-      await loadEmployees();
-    }
-
-    async function deleteEmployee() {
-      const id = document.getElementById("delete-employee").value;
-      if (!id) return;
-      const emp = employees.find(e => e.id === id);
-      if (!confirm(`本当に「${emp.name}」を削除しますか？`)) return;
-      await deleteDoc(doc(db, "employees", id));
-      await loadEmployees();
-    }
 
     async function loadData() {
       const q = query(collection(db, "attendance"), orderBy("timestamp", "asc"));
       const snapshot = await getDocs(q);
-
       allRecords = [];
       snapshot.forEach(doc => {
         const data = doc.data();
@@ -87,7 +40,6 @@
           });
         }
       });
-
       populateMonthSelect();
       renderTable();
     }
@@ -174,6 +126,7 @@
     window.addEventListener("DOMContentLoaded", () => {
       document.getElementById("month-select").addEventListener("change", renderTable);
       document.getElementById("employee-filter").addEventListener("change", renderTable);
+
       document.getElementById("download-csv").addEventListener("click", () => {
         if (!window._csvData) return;
         const csvContent = "\uFEFF" + window._csvData.map(r => r.join(",")).join("\n");
@@ -184,10 +137,23 @@
         a.download = "勤怠記録.csv";
         a.click();
       });
-      document.getElementById("add-employee-btn").addEventListener("click", addEmployee);
-      document.getElementById("delete-employee-btn").addEventListener("click", deleteEmployee);
 
-      loadEmployees();
+      document.getElementById("reset-records-btn").addEventListener("click", async () => {
+        const step1 = confirm("【注意】全ての出勤・退勤記録を削除します。本当によろしいですか？");
+        if (!step1) return;
+        const step2 = confirm("本当に削除してもよろしいですか？取り消しできません。");
+        if (!step2) return;
+        const step3 = confirm("最終確認：削除を実行します。よろしいですか？");
+        if (!step3) return;
+
+        const q = await getDocs(collection(db, "attendance"));
+        const deletions = q.docs.map(docSnap => deleteDoc(doc(db, "attendance", docSnap.id)));
+        await Promise.all(deletions);
+
+        alert("全ての記録を削除しました。");
+        loadData();
+      });
+
       loadData();
     });
   </script>
@@ -195,21 +161,6 @@
 <body class="bg-gray-100 min-h-screen p-4">
   <div class="max-w-6xl mx-auto bg-white p-6 rounded shadow">
     <h1 class="text-2xl font-bold text-blue-700 mb-4 text-center">勤怠管理（管理者）</h1>
-
-    <!-- 従業員管理 -->
-    <div class="mb-6 bg-blue-50 p-4 rounded">
-      <h2 class="text-lg font-semibold mb-2">従業員の追加・削除</h2>
-      <div class="flex flex-col md:flex-row gap-4">
-        <div class="flex-1 flex gap-2">
-          <input type="text" id="new-employee" placeholder="従業員名を入力" class="p-2 border rounded w-full" />
-          <button id="add-employee-btn" class="bg-blue-600 text-white px-4 rounded hover:bg-blue-700">追加</button>
-        </div>
-        <div class="flex-1 flex gap-2">
-          <select id="delete-employee" class="p-2 border rounded w-full"></select>
-          <button id="delete-employee-btn" class="bg-red-600 text-white px-4 rounded hover:bg-red-700">削除</button>
-        </div>
-      </div>
-    </div>
 
     <!-- フィルター -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
@@ -232,7 +183,7 @@
 
     <p id="total" class="text-right font-semibold text-gray-700 mb-2"></p>
 
-    <div class="overflow-x-auto">
+    <div class="overflow-x-auto mb-6">
       <table class="min-w-full border text-sm text-left">
         <thead class="bg-gray-100">
           <tr>
@@ -243,8 +194,16 @@
             <th class="px-4 py-2 border">実働時間</th>
           </tr>
         </thead>
-        <tbody id="records" class="bg-white divide-y divide-gray-200"></tbody>
+        <tbody id="records" class="bg-white divide-y divide-gray-200">
+        </tbody>
       </table>
+    </div>
+
+    <!-- 記録リセットボタン -->
+    <div class="text-center">
+      <button id="reset-records-btn" class="bg-red-600 text-white px-6 py-2 rounded hover:bg-red-700">
+        記録をすべて削除する
+      </button>
     </div>
   </div>
 </body>
